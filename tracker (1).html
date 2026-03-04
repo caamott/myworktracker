@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Camille's Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { background: #faf9f7; font-family: 'DM Sans', sans-serif; color: #1a1a1a; }
+  textarea, input { font-family: 'DM Sans', sans-serif; }
+  textarea:focus, input:focus { outline: none; }
+  input[type="range"] { cursor: pointer; width: 100%; }
+  input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0.35; cursor: pointer; }
+  ::-webkit-scrollbar { width: 3px; height: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #ddd; border-radius: 99px; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .project-col { animation: fadeUp 0.3s ease both; }
+  .todo-item:hover .del-btn { opacity: 1 !important; }
+  .todo-item:hover .todo-date-btn { opacity: 1 !important; }
+  .add-col:hover { border-color: #94a3b8 !important; color: #94a3b8 !important; }
+  .tag-preset:hover { opacity: 0.75; }
+  .daily-todo-item:hover .daily-del { opacity: 1 !important; }
+  .assignee-input:focus { border-color: #cbd5e1 !important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const STAGES = ["Content Strategists","Content Editors","Producers","Directors","Post Production"];
+const DAILY_PRIORITIES = ["High","Medium","Low"];
+const PRESET_TAGS = ["Self Shot","Shot Video","Scrapbook"];
+
+const STAGE_CONFIG = {
+  "Content Strategists": { color:"#7c6af7", bg:"#f0effe", border:"#d4cffe" },
+  "Content Editors":     { color:"#0ea5e9", bg:"#f0f9ff", border:"#bae6fd" },
+  "Producers":           { color:"#f59e0b", bg:"#fffbeb", border:"#fde68a" },
+  "Directors":           { color:"#e11d48", bg:"#fff1f2", border:"#fecdd3" },
+  "Post Production":     { color:"#22c55e", bg:"#f0fdf4", border:"#bbf7d0" },
+};
+const STAGE_COLORS = ["#7c6af7","#0ea5e9","#f59e0b","#e11d48","#22c55e"];
+const COL_ACCENTS  = ["#7c6af7","#0ea5e9","#f59e0b","#e11d48","#22c55e","#a855f7"];
+
+const DAILY_PRIORITY_CONFIG = {
+  High:   { color:"#dc2626", bg:"#fff1f2", border:"#fecdd3", symbol:"↑" },
+  Medium: { color:"#d97706", bg:"#fffbeb", border:"#fde68a", symbol:"→" },
+  Low:    { color:"#94a3b8", bg:"#f8fafc", border:"#e2e8f0", symbol:"↓" },
+};
+
+const TAG_PALETTE = [
+  { bg:"#eff6ff", border:"#bfdbfe", color:"#2563eb" },
+  { bg:"#fdf4ff", border:"#e9d5ff", color:"#9333ea" },
+  { bg:"#fff7ed", border:"#fed7aa", color:"#ea580c" },
+  { bg:"#f0fdf4", border:"#bbf7d0", color:"#16a34a" },
+  { bg:"#fff1f2", border:"#fecdd3", color:"#e11d48" },
+  { bg:"#f0f9ff", border:"#bae6fd", color:"#0284c7" },
+  { bg:"#fefce8", border:"#fef08a", color:"#a16207" },
+];
+const PRESET_TAG_COLORS = {
+  "Self Shot":  { bg:"#f0fdf4", border:"#bbf7d0", color:"#16a34a" },
+  "Shot Video": { bg:"#f0f9ff", border:"#bae6fd", color:"#0284c7" },
+  "Scrapbook":  { bg:"#fdf4ff", border:"#e9d5ff", color:"#9333ea" },
+};
+
+function generateId() { return Math.random().toString(36).slice(2,9); }
+function getTagColor(tag) {
+  if (PRESET_TAG_COLORS[tag]) return PRESET_TAG_COLORS[tag];
+  let h=0; for(let i=0;i<tag.length;i++) h=tag.charCodeAt(i)+((h<<5)-h);
+  return TAG_PALETTE[Math.abs(h)%TAG_PALETTE.length];
+}
+function formatDate(str) {
+  if(!str) return null;
+  const d=new Date(str+"T00:00:00"), today=new Date(); today.setHours(0,0,0,0);
+  const diff=Math.round((d-today)/86400000);
+  if(diff<0)   return {label:`${Math.abs(diff)}d overdue`, color:"#dc2626", urgent:true};
+  if(diff===0) return {label:"Today", color:"#d97706", urgent:true};
+  if(diff===1) return {label:"Tomorrow", color:"#d97706", urgent:false};
+  return {label: d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}), color:"#94a3b8", urgent:false};
+}
+function sortByDate(projects) {
+  return [...projects].sort((a,b)=>{
+    if(a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+    if(a.dueDate && !b.dueDate) return -1;
+    if(!a.dueDate && b.dueDate) return 1;
+    return 0;
+  });
+}
+
+// assignees: { "Content Strategists": "Jane", ... }
+const SAMPLE = [
+  {id:generateId(),name:"Brand Campaign Q2",stage:"Producers",progress:65,dueDate:new Date(Date.now()+3*86400000).toISOString().slice(0,10),tags:["Shot Video"],notes:"Hero video + 3 social cutdowns. Agency delivering first cut Friday.",assignees:{"Producers":"Alex"},todos:[{id:generateId(),text:"Review script",done:true,dueDate:""},{id:generateId(),text:"Approve talent",done:true,dueDate:""},{id:generateId(),text:"First cut review",done:false,dueDate:new Date(Date.now()+2*86400000).toISOString().slice(0,10)}]},
+  {id:generateId(),name:"Podcast Series — S2",stage:"Content Editors",progress:40,dueDate:new Date(Date.now()+10*86400000).toISOString().slice(0,10),tags:["Self Shot"],notes:"8 episodes. Ep 1–3 recorded, editing in progress.",assignees:{"Content Editors":"Sam"},todos:[{id:generateId(),text:"Edit ep 1",done:true,dueDate:""},{id:generateId(),text:"Edit ep 2",done:false,dueDate:""},{id:generateId(),text:"Write show notes",done:false,dueDate:""}]},
+  {id:generateId(),name:"Annual Report 2024",stage:"Post Production",progress:90,dueDate:new Date(Date.now()+1*86400000).toISOString().slice(0,10),tags:["Scrapbook"],notes:"Final amends from legal received. Nearly there.",assignees:{"Post Production":"Jordan"},todos:[{id:generateId(),text:"Legal sign-off",done:true,dueDate:""},{id:generateId(),text:"Final PDF export",done:false,dueDate:new Date(Date.now()+1*86400000).toISOString().slice(0,10)}]},
+  {id:generateId(),name:"Social Content Pack",stage:"Directors",progress:10,dueDate:new Date(Date.now()+14*86400000).toISOString().slice(0,10),tags:["Self Shot","Shot Video"],notes:"30-day content calendar for IG + LinkedIn.",assignees:{},todos:[{id:generateId(),text:"Draft brief",done:false,dueDate:""},{id:generateId(),text:"Competitor audit",done:false,dueDate:""}]},
+  {id:generateId(),name:"Product Launch Video",stage:"Content Strategists",progress:0,dueDate:"",tags:["Shot Video"],notes:"",assignees:{},todos:[]},
+];
+
+/* ── Progress Ring ── */
+function ProgressRing({value,size=46,accent="#0ea5e9"}) {
+  const pct=Math.min(100,Math.max(0,value||0));
+  const r=(size-6)/2, circ=2*Math.PI*r;
+  const color=pct===100?"#16a34a":pct>50?accent:pct>20?"#d97706":"#e2e8f0";
+  return (
+    <div style={{position:"relative",width:size,height:size,flexShrink:0}}>
+      <svg width={size} height={size} style={{transform:"rotate(-90deg)"}}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#f1f5f9" strokeWidth={5}/>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={5}
+          strokeDasharray={circ} strokeDashoffset={circ*(1-pct/100)} strokeLinecap="round"
+          style={{transition:"stroke-dashoffset 0.5s cubic-bezier(.4,0,.2,1)"}}/>
+      </svg>
+      <span style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,color,fontFamily:"monospace"}}>{pct}%</span>
+    </div>
+  );
+}
+
+/* ── Inline Edit ── */
+function InlineEdit({value,onChange,placeholder,multiline,style={}}) {
+  const [editing,setEditing]=useState(false);
+  const [val,setVal]=useState(value);
+  useEffect(()=>setVal(value),[value]);
+  const commit=()=>{setEditing(false);if(val!==value)onChange(val);};
+  if(!editing) return (
+    <div onClick={()=>setEditing(true)} style={{cursor:"text",...style}}>
+      {val||<span style={{color:"#cbd5e1"}}>{placeholder}</span>}
+    </div>
+  );
+  const base={background:"transparent",border:"none",fontFamily:"inherit",color:"inherit",padding:0,width:"100%",...style};
+  return multiline
+    ? <textarea autoFocus value={val} onChange={e=>setVal(e.target.value)} onBlur={commit} rows={3} style={{...base,resize:"vertical",lineHeight:1.5}}/>
+    : <input autoFocus value={val} onChange={e=>setVal(e.target.value)} onBlur={commit} onKeyDown={e=>e.key==="Enter"&&commit()} style={{...base}}/>;
+}
+
+/* ── Daily Column with priority grouping ── */
+function DailyColumn() {
+  const [todos,setTodos]=useState(()=>{
+    try{const s=localStorage.getItem("camille-daily-todos");return s?JSON.parse(s):[];}
+    catch{return [];}
+  });
+  const [newText,setNewText]=useState("");
+  const [newPriority,setNewPriority]=useState("Medium");
+  const today=new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"});
+
+  useEffect(()=>{
+    try{localStorage.setItem("camille-daily-todos",JSON.stringify(todos));}catch{}
+  },[todos]);
+
+  const addTodo=()=>{
+    if(!newText.trim()) return;
+    setTodos(prev=>[...prev,{id:generateId(),text:newText.trim(),done:false,priority:newPriority}]);
+    setNewText("");
+  };
+  const toggle=id=>setTodos(prev=>prev.map(t=>t.id===id?{...t,done:!t.done}:t));
+  const remove=id=>setTodos(prev=>prev.filter(t=>t.id!==id));
+  const clearDone=()=>setTodos(prev=>prev.filter(t=>!t.done));
+  const done=todos.filter(t=>t.done).length;
+
+  const grouped={
+    High:   todos.filter(t=>t.priority==="High"),
+    Medium: todos.filter(t=>!t.priority||t.priority==="Medium"),
+    Low:    todos.filter(t=>t.priority==="Low"),
+  };
+
+  return (
+    <div style={{width:220,flexShrink:0,background:"#fff",borderRadius:16,border:"1px solid #ede9e3",display:"flex",flexDirection:"column",boxShadow:"0 2px 16px rgba(0,0,0,0.05)",overflow:"hidden",animation:"fadeUp 0.3s ease both"}}>
+      <div style={{height:4,background:"linear-gradient(90deg,#f59e0b,#fbbf24)"}}/>
+      <div style={{padding:"16px 16px 14px"}}>
+        <div style={{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:3}}>Today</div>
+        <div style={{fontSize:10,color:"#94a3b8",marginBottom:12}}>{today}</div>
+
+        {todos.length>0&&(
+          <div style={{height:2,background:"#f1f5f9",borderRadius:99,overflow:"hidden",marginBottom:12}}>
+            <div style={{width:`${Math.round(done/todos.length*100)}%`,height:"100%",background:done===todos.length?"#16a34a":"#f59e0b",borderRadius:99,transition:"width 0.4s ease"}}/>
+          </div>
+        )}
+
+        {/* Grouped priority sections */}
+        <div style={{maxHeight:420,overflowY:"auto",marginBottom:10}}>
+          {DAILY_PRIORITIES.map(p=>{
+            const group=grouped[p];
+            if(group.length===0) return null;
+            const pc=DAILY_PRIORITY_CONFIG[p];
+            return (
+              <div key={p} style={{marginBottom:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:4}}>
+                  <span style={{fontSize:9,color:pc.color,fontWeight:600,letterSpacing:1,textTransform:"uppercase"}}>{pc.symbol} {p}</span>
+                  <div style={{flex:1,height:1,background:pc.border}}/>
+                </div>
+                {group.map(todo=>(
+                  <div key={todo.id} className="daily-todo-item" style={{display:"flex",alignItems:"center",gap:6,padding:"5px 4px",borderRadius:6,background:todo.done?"#fafafa":"transparent",marginBottom:2}}>
+                    <div onClick={()=>toggle(todo.id)} style={{width:14,height:14,borderRadius:3,flexShrink:0,cursor:"pointer",border:`2px solid ${todo.done?"#16a34a":"#cbd5e1"}`,background:todo.done?"#16a34a":"transparent",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>
+                      {todo.done&&<span style={{color:"#fff",fontSize:8,lineHeight:1}}>✓</span>}
+                    </div>
+                    <span style={{flex:1,fontSize:12,color:todo.done?"#94a3b8":"#334155",textDecoration:todo.done?"line-through":"none",lineHeight:1.3}}>{todo.text}</span>
+                    <button className="daily-del" onClick={()=>remove(todo.id)} style={{background:"none",border:"none",cursor:"pointer",opacity:0,color:"#ef4444",fontSize:13,padding:"0 2px",lineHeight:1,transition:"opacity 0.15s",flexShrink:0}}>×</button>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {todos.length===0&&<div style={{fontSize:12,color:"#cbd5e1",padding:"6px 2px"}}>Nothing yet — add something.</div>}
+        </div>
+
+        {/* Add with priority selector */}
+        <div style={{display:"flex",gap:4,marginBottom:6}}>
+          {DAILY_PRIORITIES.map(p=>{
+            const pc=DAILY_PRIORITY_CONFIG[p];
+            return (
+              <button key={p} onClick={()=>setNewPriority(p)} style={{
+                flex:1,padding:"3px 0",borderRadius:6,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:500,border:"1px solid",
+                color:newPriority===p?pc.color:"#94a3b8",
+                background:newPriority===p?pc.bg:"transparent",
+                borderColor:newPriority===p?pc.border:"#e2e8f0",
+              }}>{pc.symbol} {p}</button>
+            );
+          })}
+        </div>
+        <div style={{display:"flex",gap:5}}>
+          <input value={newText} onChange={e=>setNewText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addTodo();}}
+            placeholder="Add to-do..." style={{flex:1,border:"1px solid #e2e8f0",borderRadius:6,padding:"6px 8px",fontSize:12,color:"#334155",background:"#fafafa"}}/>
+          <button onClick={addTodo} style={{background:"#1a1a1a",color:"#fff",border:"none",borderRadius:6,padding:"6px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>+</button>
+        </div>
+
+        {done>0&&(
+          <button onClick={clearDone} style={{marginTop:8,background:"none",border:"none",cursor:"pointer",fontSize:10,color:"#94a3b8",padding:"2px 0",fontFamily:"inherit"}}
+            onMouseEnter={e=>e.target.style.color="#ef4444"} onMouseLeave={e=>e.target.style.color="#94a3b8"}>
+            Clear {done} done
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Project Card ── */
+function ProjectCard({project,onUpdate,onDelete,index}) {
+  const [newTodo,setNewTodo]=useState("");
+  const [newTodoDue,setNewTodoDue]=useState("");
+  const [editingTodoDue,setEditingTodoDue]=useState(null);
+  const accent=COL_ACCENTS[index%COL_ACCENTS.length];
+  const isDirectors=project.stage==="Directors";
+  const dateInfo=project.dueDate?formatDate(project.dueDate):null;
+  const todos=project.todos||[];
+  const doneTodos=todos.filter(t=>t.done).length;
+  const totalTodos=todos.length;
+  const assignees=project.assignees||{};
+
+  const addTodo=()=>{
+    if(!newTodo.trim()) return;
+    onUpdate("todos",[...todos,{id:generateId(),text:newTodo.trim(),done:false,dueDate:newTodoDue||""}]);
+    setNewTodo(""); setNewTodoDue("");
+  };
+  const toggleTodo=id=>onUpdate("todos",todos.map(t=>t.id===id?{...t,done:!t.done}:t));
+  const deleteTodo=id=>onUpdate("todos",todos.filter(t=>t.id!==id));
+  const updateTodoDue=(id,date)=>onUpdate("todos",todos.map(t=>t.id===id?{...t,dueDate:date}:t));
+  const toggleTag=tag=>{
+    const tags=project.tags||[];
+    if(tags.includes(tag)) onUpdate("tags",tags.filter(t=>t!==tag));
+    else onUpdate("tags",[...tags,tag]);
+  };
+  const setAssignee=(stage,name)=>{
+    onUpdate("assignees",{...assignees,[stage]:name});
+  };
+
+  return (
+    <div className="project-col" style={{
+      width:272,flexShrink:0,background:"#fff",borderRadius:16,
+      border:isDirectors?"2px solid #fecdd3":"1px solid #ede9e3",
+      display:"flex",flexDirection:"column",
+      boxShadow:isDirectors?"0 4px 24px rgba(225,29,72,0.10)":"0 2px 16px rgba(0,0,0,0.05)",
+      animationDelay:`${index*0.07}s`,overflow:"hidden",
+    }}>
+      <div style={{height:4,background:accent}}/>
+
+      {/* Header */}
+      <div style={{padding:"16px 18px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+          <InlineEdit value={project.name} onChange={v=>onUpdate("name",v)} placeholder="Project name"
+            style={{fontSize:15,fontFamily:"'Playfair Display',serif",fontWeight:700,color:"#0f172a",lineHeight:1.3,flex:1,marginRight:8}}/>
+          <button onClick={onDelete} style={{background:"none",border:"none",cursor:"pointer",color:"#ddd",fontSize:16,lineHeight:1,padding:"2px 4px",flexShrink:0,borderRadius:4}}
+            onMouseEnter={e=>e.target.style.color="#ef4444"} onMouseLeave={e=>e.target.style.color="#ddd"}>×</button>
+        </div>
+
+        {/* Stage + assignee per stage */}
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:9,color:"#94a3b8",letterSpacing:1.5,textTransform:"uppercase",marginBottom:6}}>Stage</div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            {STAGES.map(s=>{
+              const active=project.stage===s;
+              const c=STAGE_CONFIG[s];
+              const assignee=assignees[s]||"";
+              return (
+                <div key={s} style={{display:"flex",alignItems:"center",gap:5}}>
+                  <button onClick={()=>onUpdate("stage",s)} style={{
+                    padding:"3px 8px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+                    border:"1px solid",fontSize:10,fontWeight:active?600:400,flexShrink:0,
+                    color:active?c.color:"#94a3b8",
+                    background:active?c.bg:"transparent",
+                    borderColor:active?c.border:"#e2e8f0",
+                    transition:"all 0.12s",
+                  }}>{s}</button>
+                  <input
+                    className="assignee-input"
+                    value={assignee}
+                    onChange={e=>setAssignee(s,e.target.value)}
+                    placeholder="Assignee"
+                    style={{
+                      flex:1,border:"1px solid transparent",borderRadius:6,
+                      padding:"3px 6px",fontSize:10,
+                      color: assignee ? "#475569" : "#cbd5e1",
+                      background: assignee ? "#f8fafc" : "transparent",
+                      fontFamily:"inherit",minWidth:0,
+                      transition:"all 0.15s",
+                    }}
+                    onFocus={e=>{e.target.style.borderColor="#e2e8f0";e.target.style.background="#f8fafc";}}
+                    onBlur={e=>{if(!assignee){e.target.style.borderColor="transparent";e.target.style.background="transparent";}}}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Directors badge */}
+        {isDirectors&&(
+          <div style={{marginBottom:10,padding:"6px 10px",borderRadius:8,background:"#fff1f2",border:"1px solid #fecdd3",display:"flex",alignItems:"center",gap:6}}>
+            <span style={{fontSize:11,color:"#e11d48",fontWeight:600}}>👀 With Directors</span>
+          </div>
+        )}
+
+        {/* Progress */}
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+          <ProgressRing value={project.progress} size={44} accent={accent}/>
+          <div style={{flex:1}}>
+            <input type="range" min={0} max={100} value={project.progress||0} onChange={e=>onUpdate("progress",+e.target.value)}
+              style={{width:"100%",accentColor:accent}}/>
+          </div>
+        </div>
+
+        {/* Due date */}
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <input type="date" value={project.dueDate||""} onChange={e=>onUpdate("dueDate",e.target.value)}
+            style={{border:"1px solid #e2e8f0",borderRadius:7,padding:"4px 8px",fontSize:11,color:"#334155",background:"#fafafa",cursor:"pointer",fontFamily:"inherit"}}/>
+          {dateInfo&&<span style={{fontSize:11,color:dateInfo.color,fontWeight:dateInfo.urgent?600:400,whiteSpace:"nowrap"}}>{dateInfo.label}</span>}
+          {project.dueDate&&<button onClick={()=>onUpdate("dueDate","")} style={{background:"none",border:"none",cursor:"pointer",color:"#cbd5e1",fontSize:13,lineHeight:1}}>×</button>}
+        </div>
+      </div>
+
+      <div style={{height:1,background:"#f5f2ee",margin:"0 18px"}}/>
+
+      {/* Tags */}
+      <div style={{padding:"12px 18px"}}>
+        <div style={{fontSize:9,color:"#94a3b8",letterSpacing:1.5,textTransform:"uppercase",marginBottom:7}}>Tags</div>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+          {PRESET_TAGS.map(tag=>{
+            const active=(project.tags||[]).includes(tag);
+            const c=getTagColor(tag);
+            return (
+              <button key={tag} className="tag-preset" onClick={()=>toggleTag(tag)} style={{
+                display:"inline-flex",alignItems:"center",padding:"3px 9px",borderRadius:99,
+                fontSize:10,fontWeight:500,cursor:"pointer",fontFamily:"inherit",border:"1px solid",transition:"all 0.12s",
+                color:active?c.color:"#94a3b8",
+                background:active?c.bg:"transparent",
+                borderColor:active?c.border:"#e2e8f0",
+              }}>{tag}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{height:1,background:"#f5f2ee",margin:"0 18px"}}/>
+
+      {/* To-dos — flat list, no priority grouping */}
+      <div style={{padding:"12px 18px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div style={{fontSize:9,color:"#94a3b8",letterSpacing:1.5,textTransform:"uppercase"}}>To-dos</div>
+          {totalTodos>0&&<span style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace"}}>{doneTodos}/{totalTodos}</span>}
+        </div>
+        {totalTodos>0&&(
+          <div style={{height:2,background:"#f1f5f9",borderRadius:99,overflow:"hidden",marginBottom:8}}>
+            <div style={{width:`${Math.round(doneTodos/totalTodos*100)}%`,height:"100%",background:doneTodos===totalTodos?"#16a34a":accent,borderRadius:99,transition:"width 0.4s ease"}}/>
+          </div>
+        )}
+        <div style={{display:"flex",flexDirection:"column",gap:2,marginBottom:8}}>
+          {todos.map(todo=>{
+            const tdInfo=todo.dueDate?formatDate(todo.dueDate):null;
+            return (
+              <div key={todo.id} className="todo-item" style={{borderRadius:6,background:todo.done?"#fafafa":"transparent",padding:"4px 5px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <div onClick={()=>toggleTodo(todo.id)} style={{width:14,height:14,borderRadius:3,flexShrink:0,cursor:"pointer",border:`2px solid ${todo.done?"#16a34a":"#cbd5e1"}`,background:todo.done?"#16a34a":"transparent",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>
+                    {todo.done&&<span style={{color:"#fff",fontSize:8,lineHeight:1}}>✓</span>}
+                  </div>
+                  <span style={{flex:1,fontSize:12,color:todo.done?"#94a3b8":"#334155",textDecoration:todo.done?"line-through":"none"}}>{todo.text}</span>
+                  <button className="todo-date-btn" onClick={()=>setEditingTodoDue(editingTodoDue===todo.id?null:todo.id)}
+                    style={{background:"none",border:"none",cursor:"pointer",opacity:todo.dueDate?1:0,color:tdInfo?tdInfo.color:"#94a3b8",fontSize:10,padding:"0 2px",lineHeight:1,transition:"opacity 0.15s",flexShrink:0}}>📅</button>
+                  <button className="del-btn" onClick={()=>deleteTodo(todo.id)} style={{background:"none",border:"none",cursor:"pointer",opacity:0,color:"#ef4444",fontSize:13,padding:"0 2px",lineHeight:1,transition:"opacity 0.15s",flexShrink:0}}>×</button>
+                </div>
+                {tdInfo&&editingTodoDue!==todo.id&&(
+                  <div style={{marginLeft:20,marginTop:1}}>
+                    <span style={{fontSize:10,color:tdInfo.color,fontWeight:tdInfo.urgent?600:400}}>{tdInfo.label}</span>
+                  </div>
+                )}
+                {editingTodoDue===todo.id&&(
+                  <div style={{marginLeft:20,marginTop:4,display:"flex",alignItems:"center",gap:5}}>
+                    <input type="date" value={todo.dueDate||""} onChange={e=>updateTodoDue(todo.id,e.target.value)}
+                      style={{border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 6px",fontSize:10,color:"#334155",background:"#fafafa",fontFamily:"inherit"}}/>
+                    {todo.dueDate&&<button onClick={()=>{updateTodoDue(todo.id,"");setEditingTodoDue(null);}} style={{background:"none",border:"none",cursor:"pointer",color:"#cbd5e1",fontSize:12,lineHeight:1}}>×</button>}
+                    <button onClick={()=>setEditingTodoDue(null)} style={{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",fontSize:10,fontFamily:"inherit"}}>done</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+          <div style={{display:"flex",gap:5}}>
+            <input value={newTodo} onChange={e=>setNewTodo(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addTodo();}}
+              placeholder="Add to-do..." style={{flex:1,border:"1px solid #e2e8f0",borderRadius:6,padding:"6px 8px",fontSize:12,color:"#334155",background:"#fafafa"}}/>
+            <button onClick={addTodo} style={{background:"#1a1a1a",color:"#fff",border:"none",borderRadius:6,padding:"6px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>+</button>
+          </div>
+          <input type="date" value={newTodoDue} onChange={e=>setNewTodoDue(e.target.value)}
+            style={{border:"1px solid #e2e8f0",borderRadius:6,padding:"4px 8px",fontSize:10,color:"#94a3b8",background:"#fafafa",fontFamily:"inherit",cursor:"pointer"}}/>
+        </div>
+      </div>
+
+      <div style={{height:1,background:"#f5f2ee",margin:"0 18px"}}/>
+
+      {/* Notes */}
+      <div style={{padding:"12px 18px"}}>
+        <div style={{fontSize:9,color:"#94a3b8",letterSpacing:1.5,textTransform:"uppercase",marginBottom:6}}>Notes</div>
+        <InlineEdit value={project.notes||""} onChange={v=>onUpdate("notes",v)} placeholder="Add notes..." multiline
+          style={{fontSize:12,color:"#475569",lineHeight:1.6}}/>
+      </div>
+    </div>
+  );
+}
+
+/* ── App ── */
+function App() {
+  const [projects,setProjects]=useState(()=>{
+    try{const s=localStorage.getItem("camille-projects-v5");return s?JSON.parse(s):SAMPLE;}
+    catch{return SAMPLE;}
+  });
+
+  useEffect(()=>{
+    try{localStorage.setItem("camille-projects-v5",JSON.stringify(projects));}catch{}
+  },[projects]);
+
+  const addProject=()=>setProjects(prev=>[...prev,{
+    id:generateId(),name:"New Project",stage:"Content Strategists",
+    progress:0,dueDate:"",tags:[],notes:"",assignees:{},todos:[]
+  }]);
+  const updateProject=(id,key,val)=>setProjects(prev=>prev.map(p=>p.id===id?{...p,[key]:val}:p));
+  const deleteProject=id=>setProjects(prev=>prev.filter(p=>p.id!==id));
+  const sortedProjects=sortByDate(projects);
+
+  const stageCounts=STAGES.map(s=>({stage:s,count:projects.filter(p=>p.stage===s).length}));
+  const motto=[
+    projects.length===0&&"No projects yet. Add one to get started.",
+    projects.filter(p=>p.stage==="Post Production").length>0&&"Final stretch on some — keep pushing.",
+    "Here's where everything stands.",
+  ].find(Boolean);
+
+  return (
+    <div style={{minHeight:"100vh",background:"#faf9f7",padding:"36px 32px 60px"}}>
+      <div style={{marginBottom:28,display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:12}}>
+        <div>
+          <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:30,fontWeight:900,color:"#0f172a",letterSpacing:"-0.5px",marginBottom:4}}>Camille's Tracker</h1>
+          <p style={{fontSize:13,color:"#94a3b8"}}>{motto}</p>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          {stageCounts.map(({stage,count},i)=>count>0&&(
+            <div key={stage} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:99,background:STAGE_CONFIG[stage].bg,border:`1px solid ${STAGE_CONFIG[stage].border}`}}>
+              <div style={{width:6,height:6,borderRadius:"50%",background:STAGE_COLORS[i]}}/>
+              <span style={{fontSize:11,fontWeight:600,color:STAGE_CONFIG[stage].color}}>{count}</span>
+              <span style={{fontSize:10,color:STAGE_CONFIG[stage].color,opacity:0.75}}>{stage}</span>
+            </div>
+          ))}
+          <button onClick={addProject} style={{background:"#1a1a1a",color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}
+            onMouseEnter={e=>e.currentTarget.style.background="#334155"} onMouseLeave={e=>e.currentTarget.style.background="#1a1a1a"}>
+            + Add Project
+          </button>
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:14,alignItems:"flex-start",overflowX:"auto",paddingBottom:24,minHeight:"70vh"}}>
+        <DailyColumn/>
+        <div style={{width:1,background:"#e9e4de",alignSelf:"stretch",flexShrink:0,borderRadius:99,marginTop:4}}/>
+        {projects.length===0?(
+          <div style={{display:"flex",alignItems:"center",padding:"60px 20px",color:"#cbd5e1",fontSize:13}}>No projects yet — add one →</div>
+        ):(
+          sortedProjects.map((project,i)=>(
+            <ProjectCard key={project.id} project={project} index={i}
+              onUpdate={(key,val)=>updateProject(project.id,key,val)}
+              onDelete={()=>deleteProject(project.id)}/>
+          ))
+        )}
+        <div className="add-col" onClick={addProject} style={{
+          width:52,flexShrink:0,height:90,border:"2px dashed #e2e8f0",borderRadius:16,
+          display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",
+          color:"#cbd5e1",fontSize:24,background:"transparent",marginTop:4,transition:"all 0.15s",
+        }}>+</div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
